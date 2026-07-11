@@ -17,13 +17,12 @@ input{width:100%;padding:10px;border-radius:8px;border:1px solid #333;background
 <script>
 const BASE = 'https://kvideo-8gw.pages.dev';
 const S = id => document.getElementById(id);
-const log = m => S('s').textContent += '\n' + m;
+const log = m => { const el = S('s'); el.textContent += '\n' + m; el.scrollTop = el.scrollHeight; };
 
 async function start() {
   let u = S('urlInput').value.trim() || new URL(location.href).searchParams.get('url');
   if (!u) { alert('请粘贴 m3u8 地址'); return; }
   S('s').textContent = '';
-
   const proxy = raw => BASE + '/api/proxy?url=' + encodeURIComponent(raw);
 
   try {
@@ -31,60 +30,91 @@ async function start() {
     let res = await fetch(proxy(u));
     let text = await res.text();
 
-    async function getSegs(url, text) {
-      const lines = text.split(/\r?\n/);
-      if (!text.includes('EXT-X-STREAM-INF'))
-        return lines.filter(l => l.trim() && !l.startsWith('#')).map(l => l.startsWith('http') ? l : new URL(l, url).toString());
-      let vs = [], bw = 0;
-      for (const line of lines) {
-        const t = line.trim();
-        if (t.startsWith('#EXT-X-STREAM-INF:')) bw = parseInt(t.match(/BANDWIDTH=(\d+)/)?.[1] || '0');
-        else if (bw > 0 && t && !t.startsWith('#')) { vs.push({bw, url: t.startsWith('http') ? t : new URL(t, url).toString()}); bw = 0; }
-      }
-      vs.sort((a,b) => b.bw - a.bw);
-      if (!vs.length) throw '无可用视频流';
-      log('画质: ' + vs[0].url);
-      let r2 = await fetch(proxy(vs[0].url));
-      let t2 = await r2.text();
-      return t2.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#')).map(l => l.startsWith('http') ? l : new URL(l, vs[0].url).toString());
-    }
-
-    const segs = await getSegs(u, text);
-    log('分片数: ' + segs.length);
-
-    const bufs = []; const failed = new Set(); const CONCUR = 5;
-    for (let pass = 1; pass <= 3; pass++) {
-      let targets = pass === 1 ? segs.map((_,i) => i) : [...failed].filter(i => i < segs.length);
-      if (targets.length === 0) break;
-      if (pass > 1) { log('--- 第' + pass + '轮重试 ' + targets.length + '个 ---'); await new Promise(x => setTimeout(x, 3000)); }
-      let done = 0;
-      async function work(idx) {
-        try {
-          let sr = await fetch(proxy(segs[idx]));
-          if (sr.ok) { bufs.push(await sr.arrayBuffer()); failed.delete(idx); log('OK ' + (done+1) + '/' + targets.length); }
-          else { failed.add(idx); log('XX ' + (done+1) + '/' + targets.length); }
-        } catch(e) { failed.add(idx); log('XX ' + (done+1) + '/' + targets.length); }
-        done++;
-      }
-      // Run CONCUR at a time
-      for (let i = 0; i < targets.length; i += CONCUR) {
-        const batch = targets.slice(i, i + CONCUR);
-        await Promise.all(batch.map(idx => work(idx)));
-      }
-    }
-    if (failed.size > 0) log(failed.size + '个最终失败');
-    const totalMB = (bufs.reduce((s,b) => s + b.byteLength, 0) / 1048576).toFixed(1);
-    log('\n拼接 ' + totalMB + 'MB...');
-    const blob = new Blob(bufs, {type:'video/mp2t'});
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'video_' + Date.now() + '.ts';
-    a.click();
-    log('\n✅ 下载完成！文件: ' + a.download);
-  } catch(e) { log('\n❌ 错误: ' + e.message); }
+    const allSegs = await parseM3u8(text, u, proxy);
+    log('分片数: ' + allSegs.length);
+    await downloadAll(allSegs, proxy);
+  } catch(e) {
+    log('\n❌ 错误: ' + (e.message || e));
+  }
 }
 
-// Auto-start if URL in query param
+async function parseM3u8(text, baseUrl, proxy) {
+  const lines = text.split(/\r?\n/);
+  if (text.includes('EXT-X-STREAM-INF')) {
+    let variants = [];
+    let bw = 0;
+    for (const line of lines) {
+      const t = line.trim();
+      if (t.startsWith('#EXT-X-STREAM-INF:')) {
+        bw = parseInt(t.match(/BANDWIDTH=(\d+)/)?.[1] || '0');
+      } else if (bw > 0 && t && !t.startsWith('#')) {
+        variants.push({ bw, url: t.startsWith('http') ? t : new URL(t, baseUrl).toString() });
+        bw = 0;
+      }
+    }
+    variants.sort((a, b) => b.bw - a.bw);
+    if (!variants.length) throw new Error('无可用视频流');
+    log('画质: ' + variants[0].url);
+    let r2 = await fetch(proxy(variants[0].url));
+    let t2 = await r2.text();
+    return t2.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#')).map(l => l.startsWith('http') ? l : new URL(l, variants[0].url).toString());
+  }
+  return lines.filter(l => l.trim() && !l.startsWith('#')).map(l => l.startsWith('http') ? l : new URL(l, baseUrl).toString());
+}
+
+async function downloadAll(segs, proxy) {
+  const bufs = [];
+  let failed = [];
+  const CONCUR = 5;
+  const total = segs.length;
+  let done = 0;
+
+  for (let pass = 1; pass <= 3; pass++) {
+    const indices = pass === 1 ? segs.map((_, i) => i) : [...failed];
+    if (indices.length === 0) break;
+    failed = [];
+
+    if (pass > 1) {
+      log('--- 第' + pass + '轮重试 ' + indices.length + '个 ---');
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    for (let i = 0; i < indices.length; i += CONCUR) {
+      const batch = indices.slice(i, i + CONCUR);
+      await Promise.all(batch.map(async (idx) => {
+        done++;
+        const n = done;
+        try {
+          const sr = await fetch(proxy(segs[idx]));
+          if (sr.ok) {
+            bufs.push(await sr.arrayBuffer());
+            log('OK ' + n + '/' + total);
+          } else {
+            failed.push(idx);
+            log('XX ' + n + '/' + total);
+          }
+        } catch(e) {
+          failed.push(idx);
+          log('XX ' + n + '/' + total);
+        }
+      }));
+    }
+  }
+
+  if (failed.length > 0) {
+    log(failed.length + '个分片最终下载失败');
+  }
+  const totalMB = (bufs.reduce((s, b) => s + b.byteLength, 0) / 1048576).toFixed(1);
+  log('\n拼接 ' + totalMB + 'MB...');
+  const blob = new Blob(bufs, { type: 'video/mp2t' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  const filename = 'video_' + Date.now() + '.ts';
+  a.download = filename;
+  a.click();
+  log('\n✅ 下载完成！文件: ' + filename + ' (' + totalMB + 'MB)');
+}
+
 window.onload = () => { const u = new URL(location.href).searchParams.get('url'); if (u) { S('urlInput').value = u; start(); } };
 </script>
 </body>
