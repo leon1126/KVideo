@@ -10,6 +10,7 @@ input{width:100%;padding:10px;border-radius:8px;border:1px solid #333;background
 .ok{color:#4ade80}
 .xx{color:#f87171}
 .sum{color:#fbbf24}
+.big{color:#60a5fa}
 </style>
 </head>
 <body>
@@ -81,10 +82,12 @@ function fmtSize(bytes) {
 async function downloadAll(segs, proxy) {
   const bufs = [];
   let failed = [];
-  const CONCUR = 5;
+  const CONCUR = 2; // 降低并发避免被CDN限速
   const total = segs.length;
   let done = 0;
   let totalBytes = 0;
+  let smallCount = 0; // 统计小分片
+  const NORMAL_SIZE = 500 * 1024; // 500KB以上视为正常分片
 
   for (let pass = 1; pass <= 3; pass++) {
     const indices = pass === 1 ? segs.map((_, i) => i) : [...failed];
@@ -102,12 +105,22 @@ async function downloadAll(segs, proxy) {
         done++;
         const n = done;
         try {
-          const sr = await fetch(proxy(segs[idx]));
+          // 先试直连（可能不支持CORS，但试试无妨）
+          let sr;
+          try {
+            sr = await fetch(segs[idx], { mode: 'cors', signal: AbortSignal.timeout(5000) });
+          } catch(e) {
+            // CORS 失败，走代理
+            sr = await fetch(proxy(segs[idx]), { signal: AbortSignal.timeout(15000) });
+          }
           const buf = await sr.arrayBuffer();
+          const isSmall = buf.byteLength < NORMAL_SIZE;
+          if (isSmall) smallCount++;
           if (sr.ok && buf.byteLength > 1000) {
             bufs.push(buf);
             totalBytes += buf.byteLength;
-            log('OK ' + n + '/' + total + ' ' + fmtSize(buf.byteLength), 'ok');
+            const cls = isSmall ? '' : 'big';
+            log('OK ' + n + '/' + total + ' ' + fmtSize(buf.byteLength), cls);
           } else {
             failed.push(idx);
             log('XX ' + n + '/' + total + ' ' + fmtSize(buf.byteLength), 'xx');
@@ -117,21 +130,24 @@ async function downloadAll(segs, proxy) {
           log('XX ' + n + '/' + total + ' err', 'xx');
         }
       }));
+      // 每批之间延迟300ms，避免触发CDN限速
+      if (i + CONCUR < indices.length) {
+        await new Promise(r => setTimeout(r, 300));
+      }
     }
 
     const good = total - failed.length;
-    log('→ 第' + pass + '轮: ' + good + '/'
-      + total + ' OK, 累计 ' + fmtSize(totalBytes), 'sum');
+    log('→ 第' + pass + '轮: ' + good + '/' + total + ' OK, 累计 ' + fmtSize(totalBytes), 'sum');
   }
 
+  const bigCount = bufs.length - smallCount < 0 ? 0 : bufs.length - Math.min(smallCount, bufs.length);
   log('\n====== 下载报告 ======', 'sum');
   log('总分段: ' + total, 'sum');
   log('成功: ' + bufs.length, 'sum');
   log('失败: ' + failed.length, 'sum');
+  log('正常分片(>500KB): ' + bigCount, 'sum');
+  log('小分片(<500KB): ' + smallCount, 'sum');
   log('总大小: ' + fmtSize(totalBytes), 'sum');
-  if (bufs.length > 0) {
-    log('平均分片: ' + fmtSize(totalBytes / bufs.length), 'sum');
-  }
 
   if (bufs.length === 0) {
     log('❌ 没有成功下载任何分片', 'xx');
