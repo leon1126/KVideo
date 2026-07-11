@@ -23,14 +23,14 @@ async function start() {
   let u = S('urlInput').value.trim() || new URL(location.href).searchParams.get('url');
   if (!u) { alert('请粘贴 m3u8 地址'); return; }
   S('s').textContent = '';
-  
+
   const proxy = raw => BASE + '/api/proxy?url=' + encodeURIComponent(raw);
-  
+
   try {
     log('获取 m3u8...');
     let res = await fetch(proxy(u));
     let text = await res.text();
-    
+
     async function getSegs(url, text) {
       const lines = text.split(/\r?\n/);
       if (!text.includes('EXT-X-STREAM-INF'))
@@ -48,10 +48,10 @@ async function start() {
       let t2 = await r2.text();
       return t2.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#')).map(l => l.startsWith('http') ? l : new URL(l, vs[0].url).toString());
     }
-    
+
     const segs = await getSegs(u, text);
     log('分片数: ' + segs.length);
-    
+
     const bufs = []; const failed = new Set(); const CONCUR = 5;
     for (let pass = 1; pass <= 3; pass++) {
       let targets = pass === 1 ? segs.map((_,i) => i) : [...failed].filter(i => i < segs.length);
@@ -61,9 +61,10 @@ async function start() {
       async function work(idx) {
         try {
           let sr = await fetch(proxy(segs[idx]));
-          if (sr.ok) { bufs.push(await sr.arrayBuffer()); failed.delete(idx); log('OK ' + done + '/' + targets.length); }
-          else { failed.add(idx); log('XX ' + done + '/' + targets.length); }
-        } catch(e) { failed.add(idx); log('XX ' + done + '/' + targets.length); }
+          if (sr.ok) { bufs.push(await sr.arrayBuffer()); failed.delete(idx); log('OK ' + (done+1) + '/' + targets.length); }
+          else { failed.add(idx); log('XX ' + (done+1) + '/' + targets.length); }
+        } catch(e) { failed.add(idx); log('XX ' + (done+1) + '/' + targets.length); }
+        done++;
       }
       // Run CONCUR at a time
       for (let i = 0; i < targets.length; i += CONCUR) {
