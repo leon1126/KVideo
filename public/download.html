@@ -82,12 +82,12 @@ function fmtSize(bytes) {
 async function downloadAll(segs, proxy) {
   const bufs = [];
   let failed = [];
-  const CONCUR = 2; // 降低并发避免被CDN限速
+  const CONCUR = 5; // 并发数
   const total = segs.length;
   let done = 0;
   let totalBytes = 0;
-  let smallCount = 0; // 统计小分片
-  const NORMAL_SIZE = 500 * 1024; // 500KB以上视为正常分片
+  let smallCount = 0;
+  const NORMAL_SIZE = 500 * 1024;
 
   for (let pass = 1; pass <= 3; pass++) {
     const indices = pass === 1 ? segs.map((_, i) => i) : [...failed];
@@ -105,22 +105,13 @@ async function downloadAll(segs, proxy) {
         done++;
         const n = done;
         try {
-          // 先试直连（可能不支持CORS，但试试无妨）
-          let sr;
-          try {
-            sr = await fetch(segs[idx], { mode: 'cors', signal: AbortSignal.timeout(5000) });
-          } catch(e) {
-            // CORS 失败，走代理
-            sr = await fetch(proxy(segs[idx]), { signal: AbortSignal.timeout(15000) });
-          }
+          const sr = await fetch(proxy(segs[idx]), { signal: AbortSignal.timeout(30000) });
           const buf = await sr.arrayBuffer();
-          const isSmall = buf.byteLength < NORMAL_SIZE;
-          if (isSmall) smallCount++;
+          if (buf.byteLength < NORMAL_SIZE) smallCount++;
           if (sr.ok && buf.byteLength > 1000) {
             bufs.push(buf);
             totalBytes += buf.byteLength;
-            const cls = isSmall ? '' : 'big';
-            log('OK ' + n + '/' + total + ' ' + fmtSize(buf.byteLength), cls);
+            log('OK ' + n + '/' + total + ' ' + fmtSize(buf.byteLength));
           } else {
             failed.push(idx);
             log('XX ' + n + '/' + total + ' ' + fmtSize(buf.byteLength), 'xx');
@@ -130,9 +121,9 @@ async function downloadAll(segs, proxy) {
           log('XX ' + n + '/' + total + ' err', 'xx');
         }
       }));
-      // 每批之间延迟300ms，避免触发CDN限速
-      if (i + CONCUR < indices.length) {
-        await new Promise(r => setTimeout(r, 300));
+      // 每连续10个分片后延迟800ms，避免触发CDN限速
+      if (done % 10 === 0 && i + CONCUR < indices.length) {
+        await new Promise(r => setTimeout(r, 800));
       }
     }
 
@@ -140,7 +131,7 @@ async function downloadAll(segs, proxy) {
     log('→ 第' + pass + '轮: ' + good + '/' + total + ' OK, 累计 ' + fmtSize(totalBytes), 'sum');
   }
 
-  const bigCount = bufs.length - smallCount < 0 ? 0 : bufs.length - Math.min(smallCount, bufs.length);
+  const bigCount = Math.max(0, bufs.length - smallCount);
   log('\n====== 下载报告 ======', 'sum');
   log('总分段: ' + total, 'sum');
   log('成功: ' + bufs.length, 'sum');
