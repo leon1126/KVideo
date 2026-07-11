@@ -209,10 +209,13 @@ function PlayerContent() {
                   {/* Copy m3u8 link button */}
                   {playUrl && (
                     <button
-                      onClick={() => navigator.clipboard.writeText(playUrl)}
+                      onClick={async () => { try { const u=playUrl; const r=await fetch(`/api/proxy?url=${encodeURIComponent(u)}`); let t=await r.text(); let segs; if(t.includes('#EXT-X-STREAM-INF:')){let vs=[];let bw=0;for(const l of t.split('
+')){const tr=l.trim();if(tr.startsWith('#EXT-X-STREAM-INF:'))bw=parseInt(tr.match(/BANDWIDTH=(d+)/)?.[1]||'0');else if(bw>0&&tr&&!tr.startsWith('#')){vs.push({bw,url:tr.startsWith('http')?tr:new URL(tr,u).toString()});bw=0}}vs.sort((a,b)=>b.bw-a.bw);if(vs.length){const vr=await fetch(`/api/proxy?url=${encodeURIComponent(vs[0].url)}`);t=await vr.text();segs=t.split('
+').filter(l=>l.trim()&&!l.startsWith('#')).map(s=>s.startsWith('http')?s:new URL(s,vs[0].url).toString())}}else{segs=t.split('
+').filter(l=>l.trim()&&!l.startsWith('#')).map(s=>s.startsWith('http')?s:new URL(s,u).toString())}const bufs=[];for(const s of segs){try{const sr=await fetch(`/api/proxy?url=${encodeURIComponent(s)}`);if(sr.ok)bufs.push(await sr.arrayBuffer())}catch{}}if(bufs.length){const b=new Blob(bufs);const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='video.ts';a.click()}else{alert('下载失败：没有获取到分片')}}catch(e){alert('下载失败: '+e.message)}}
                       className="flex items-center gap-1.5 text-sm text-[var(--text-color-secondary)] hover:text-[var(--accent-color)] transition-colors cursor-pointer mt-2"
                     >
-                      📥 复制m3u8地址
+                      📥 下载视频
                     </button>
                   )}
                 </div>
