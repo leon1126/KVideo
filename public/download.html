@@ -20,18 +20,11 @@ textarea{height:100px}
 <body>
 <h2>📥 KVideo 批量下载器</h2>
 <textarea id="urlInput" placeholder="粘贴 m3u8 地址，每行一集"></textarea>
-<button class="btn" onclick="start()">▶ 开始下载（24集同时）</button>
-<div id="s">就绪，粘贴 m3u8 地址后点开始下载（多集同时下载）</div>
+<button class="btn" onclick="start()">▶ 开始下载</button>
+<div id="s">就绪，粘贴 m3u8 地址后点开始下载</div>
 <script>
 const BASE = 'https://kvideo-8gw.pages.dev';
-const S = id => document.getElementById('s');
-const log = (html, cls) => {
-  const d = document.createElement('div');
-  d.innerHTML = html;
-  if (cls) d.className = cls;
-  S().appendChild(d);
-  S().scrollTop = S().scrollHeight;
-};
+const S = () => document.getElementById('s');
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
 async function start() {
@@ -40,7 +33,6 @@ async function start() {
   const urls = raw.split('\n').map(u => u.trim()).filter(u => u);
   S().textContent = '';
 
-  // 创建每集的DOM行
   const rows = urls.map((_, i) => {
     const row = document.createElement('div');
     row.className = 'epLine';
@@ -49,23 +41,23 @@ async function start() {
     return row;
   });
 
-  // 每集各跑各的，同时运行
   await Promise.all(urls.map((u, i) => downloadEpisode(u, i, urls.length, rows[i])));
-  log('<b>🎉 全部下载完成！</b>', 'epDone');
+  const done = document.createElement('div');
+  done.innerHTML = '<b>🎉 全部下载完成！</b>';
+  done.className = 'epDone';
+  S().appendChild(done);
 }
 
 async function downloadEpisode(m3u8Url, ep, total, row) {
   const proxy = raw => BASE + '/api/proxy?url=' + encodeURIComponent(raw);
-
-  function setProg(html) { row.querySelector('.epProg').textContent = html; }
-  function setSize(html) { row.querySelector('.epSize').textContent = html; }
+  const prog = () => row.querySelector('.epProg');
+  const sz = () => row.querySelector('.epSize');
 
   try {
-    setProg('解析中...');
+    prog().textContent = '解析中...';
     let res = await fetch(proxy(m3u8Url));
     let text = await res.text();
 
-    // 解析m3u8
     const lines = text.split(/\r?\n/);
     let segs;
     if (text.includes('EXT-X-STREAM-INF')) {
@@ -85,7 +77,7 @@ async function downloadEpisode(m3u8Url, ep, total, row) {
     }
 
     const totalSegs = segs.length;
-    setProg('0/' + totalSegs);
+    prog().textContent = '0/' + totalSegs;
     const bufs = [];
     let failed = [];
     let totalBytes = 0;
@@ -113,23 +105,23 @@ async function downloadEpisode(m3u8Url, ep, total, row) {
         } catch(e) {
           failed.push(idx);
         }
-        setProg(seq + '/' + totalSegs);
-        setSize(fmtSize(totalBytes));
+        prog().textContent = seq + '/' + totalSegs;
+        sz().textContent = fmtSize(totalBytes);
         if (b < indices.length - 1) await delay(1000);
         if (seq % 3 === 0 && b < indices.length - 1) await delay(2500);
+        if (seq % 100 === 0) await delay(10000);
       }
     }
 
-    // 保存文件
     const blob = new Blob(bufs, { type: 'video/mp2t' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = 'ep_' + String(ep+1).padStart(2,'0') + '.ts';
     a.click();
-    setProg('✅ ' + bufs.length + '/' + totalSegs);
+    prog().textContent = '✅ ' + bufs.length + '/' + totalSegs;
     row.querySelector('.epNum').textContent = '✅ #' + String(ep+1).padStart(2,'0');
   } catch(e) {
-    setProg('❌ ' + (e.message || e));
+    prog().textContent = '❌ ' + (e.message || e);
     row.className = 'epLine epErr';
   }
 }
