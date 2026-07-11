@@ -115,7 +115,7 @@ async function downloadAll(segs, proxy) {
       }
 
       // 每10个分片延迟1.5秒（模拟正常播放节奏）
-      if (seq % 10 === 0 && b < indices.length - 1) {
+      if (seq % 5 === 0 && b < indices.length - 1) {
         log('--- 暂停1.5秒 ---', 'wait');
         await delay(2500);
       }
