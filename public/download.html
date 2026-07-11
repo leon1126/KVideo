@@ -52,20 +52,27 @@ async function start() {
     const segs = await getSegs(u, text);
     log('分片数: ' + segs.length);
     
-    const bufs = []; const failed = new Set();
+    const bufs = []; const failed = new Set(); const CONCUR = 5;
     for (let pass = 1; pass <= 3; pass++) {
-      const targets = pass === 1 ? segs.map((_,i) => i) : [...failed].filter(i => i < segs.length);
+      let targets = pass === 1 ? segs.map((_,i) => i) : [...failed].filter(i => i < segs.length);
       if (targets.length === 0) break;
-      if (pass > 1) { log(' --- 第' + pass + '轮重试（' + targets.length + '个）---'); await new Promise(x => setTimeout(x, 3000)); }
-      for (const i of targets) {
+      if (pass > 1) { log('--- 第' + pass + '轮重试 ' + targets.length + '个 ---'); await new Promise(x => setTimeout(x, 3000)); }
+      let done = 0;
+      async function work(idx) {
         try {
-          let sr = await fetch(proxy(segs[i]));
-          if (sr.ok) { bufs.push(await sr.arrayBuffer()); log('' + (i+1)); failed.delete(i); }
-          else failed.add(i);
-        } catch(e) { failed.add(i); }
+          let sr = await fetch(proxy(segs[idx]));
+          if (sr.ok) { bufs.push(await sr.arrayBuffer()); failed.delete(idx); }
+          else failed.add(idx);
+        } catch(e) { failed.add(idx); }
+        done++; log(done + '/' + targets.length);
+      }
+      // Run CONCUR at a time
+      for (let i = 0; i < targets.length; i += CONCUR) {
+        const batch = targets.slice(i, i + CONCUR);
+        await Promise.all(batch.map(idx => work(idx)));
       }
     }
-    if (failed.size > 0) log('剩余 ' + failed.size + '个分片最终失败');
+    if (failed.size > 0) log(failed.size + '个最终失败');
     const totalMB = (bufs.reduce((s,b) => s + b.byteLength, 0) / 1048576).toFixed(1);
     log('\n拼接 ' + totalMB + 'MB...');
     const blob = new Blob(bufs, {type:'video/mp2t'});
