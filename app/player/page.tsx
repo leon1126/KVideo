@@ -205,6 +205,16 @@ function PlayerContent() {
                   <span className="text-sm text-[var(--text-color-secondary)]">
                     收藏这个视频
                   </span>
+
+                  {/* Copy m3u8 link button */}
+                  {playUrl && (
+                    <button
+                      onClick={() => navigator.clipboard.writeText(playUrl)}
+                      className="flex items-center gap-1.5 text-sm text-[var(--text-color-secondary)] hover:text-[var(--accent-color)] transition-colors cursor-pointer mt-2"
+                    >
+                      📥 复制m3u8地址
+                    </button>
+                  )}
                 </div>
               )}
             </div>
