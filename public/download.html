@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>下载视频</title></head>
+<body style="font-family:sans-serif;max-width:600px;margin:50px auto;padding:20px">
+<h2>📥 视频下载中...</h2>
+<div id="status" style="white-space:pre-wrap;background:#f5f5f5;padding:15px;border-radius:8px"></div>
+<script>
+const url = new URL(location.href).searchParams.get('url');
+if (!url) { document.getElementById('status').textContent = '缺少 url 参数'; throw ''; }
+
+const log = m => document.getElementById('status').textContent += m + '\n';
+const proxy = u => '/api/proxy?url=' + encodeURIComponent(u);
+
+(async () => {
+  log('开始获取 m3u8...');
+  const res = await fetch(proxy(url));
+  const text = await res.text();
+  
+  async function getSegments(m3u8Url, m3u8Text) {
+    const lines = m3u8Text.split(/\r?\n/);
+    if (!m3u8Text.includes('#EXT-X-STREAM-INF:')) {
+      return lines.filter(l => l.trim() && !l.startsWith('#')).map(l => l.startsWith('http') ? l : new URL(l, m3u8Url).toString());
+    }
+    // Master playlist - find highest bandwidth variant
+    let variants = [], bw = 0;
+    for (const line of lines) {
+      const t = line.trim();
+      if (t.startsWith('#EXT-X-STREAM-INF:')) bw = parseInt(t.match(/BANDWIDTH=(\d+)/)?.[1] || '0');
+      else if (bw > 0 && t && !t.startsWith('#')) { variants.push({bw, url: t.startsWith('http') ? t : new URL(t, m3u8Url).toString()}); bw = 0; }
+    }
+    variants.sort((a,b) => b.bw - a.bw);
+    if (!variants.length) throw 'No variants found';
+    log('选择最高画质: ' + variants[0].url);
+    const vr = await fetch(proxy(variants[0].url));
+    const vc = await vr.text();
+    return vc.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#')).map(l => l.startsWith('http') ? l : new URL(l, variants[0].url).toString());
+  }
+
+  const segs = await getSegments(url, text);
+  log('找到 ' + segs.length + ' 个分片，开始下载...');
+  
+  const bufs = [];
+  for (let i = 0; i < segs.length; i++) {
+    try {
+      const sr = await fetch(proxy(segs[i]));
+      if (sr.ok) bufs.push(await sr.arrayBuffer());
+      log('分片 ' + (i+1) + '/' + segs.length + ' (' + ((i+1)/segs.length*100).toFixed(0) + '%)');
+    } catch(e) { log('分片 ' + (i+1) + ' 跳过'); }
+  }
+  
+  log('拼接中... (' + (bufs.reduce((s,b) => s+b.byteLength, 0)/1024/1024).toFixed(1) + 'MB)');
+  const blob = new Blob(bufs, {type:'video/mp2t'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'video_' + Date.now() + '.ts';
+  a.click();
+  log('✅ 下载完成！');
+})();
+</script>
+</body>
+</html>
