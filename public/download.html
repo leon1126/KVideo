@@ -9,7 +9,7 @@ body{font-family:sans-serif;max-width:600px;margin:30px auto;padding:20px;backgr
 input{width:100%;padding:10px;border-radius:8px;border:1px solid #333;background:#222;color:#eee;margin:10px 0;box-sizing:border-box}
 .ok{color:#4ade80}
 .xx{color:#f87171}
-.sum{color:#fbbf24}
+.wait{color:#fbbf24}
 </style>
 </head>
 <body>
@@ -35,7 +35,6 @@ async function start() {
   if (!u) { alert('请粘贴 m3u8 地址'); return; }
   S('s').textContent = '';
   const proxy = raw => BASE + '/api/proxy?url=' + encodeURIComponent(raw);
-
   try {
     log('获取 m3u8...');
     let res = await fetch(proxy(u));
@@ -43,16 +42,13 @@ async function start() {
     const allSegs = await parseM3u8(text, u, proxy);
     log('分片数: ' + allSegs.length);
     await downloadAll(allSegs, proxy);
-  } catch(e) {
-    log('\n❌ 错误: ' + (e.message || e));
-  }
+  } catch(e) { log('\n❌ 错误: ' + (e.message || e)); }
 }
 
 async function parseM3u8(text, baseUrl, proxy) {
   const lines = text.split(/\r?\n/);
   if (text.includes('EXT-X-STREAM-INF')) {
-    let variants = [];
-    let bw = 0;
+    let variants = [], bw = 0;
     for (const line of lines) {
       const t = line.trim();
       if (t.startsWith('#EXT-X-STREAM-INF:')) bw = parseInt(t.match(/BANDWIDTH=(\d+)/)?.[1] || '0');
@@ -80,6 +76,7 @@ async function downloadAll(segs, proxy) {
   const CONCUR = 2;
   const total = segs.length;
   let totalBytes = 0;
+  let doneTotal = 0;   // 全局计数器（跨轮次）
 
   for (let pass = 1; pass <= 3; pass++) {
     const indices = pass === 1 ? segs.map((_, i) => i) : [...failed];
@@ -87,58 +84,57 @@ async function downloadAll(segs, proxy) {
     failed = [];
 
     if (pass > 1) {
-      log('--- 第' + pass + '轮重试 ' + indices.length + '个 ---', 'sum');
+      log('--- 第' + pass + '轮重试 ' + indices.length + '个 ---', 'wait');
       await delay(2000);
     }
 
-    let inThisPass = 0;
+    let passIdx = -1;  // 本轮内序号
     for (let i = 0; i < indices.length; i += CONCUR) {
       const batch = indices.slice(i, i + CONCUR);
       await Promise.all(batch.map(async (idx) => {
+        passIdx++;
+        doneTotal++;
+        const seq = doneTotal;
         try {
           const sr = await fetch(proxy(segs[idx]), { signal: AbortSignal.timeout(30000) });
           const buf = await sr.arrayBuffer();
           if (sr.ok && buf.byteLength > 1000) {
             bufs.push(buf);
             totalBytes += buf.byteLength;
+            log('OK ' + seq + '/' + total + ' ' + fmtSize(buf.byteLength), 'ok');
           } else {
             failed.push(idx);
+            log('XX ' + seq + '/' + total + ' ' + fmtSize(buf.byteLength), 'xx');
           }
         } catch(e) {
           failed.push(idx);
+          log('XX ' + seq + '/' + total + ' err', 'xx');
         }
       }));
-      inThisPass += batch.length;
-      log((failed.includes(batch[0]) ? 'XX' : 'OK') + ' ' + inThisPass + '/' + total + ' ' + fmtSize(totalBytes));
 
-      // 每连续10个分片，停2秒
-      if (inThisPass % 10 === 0 && i + CONCUR < indices.length) {
-        log('--- 等待2秒避免CDN限速 ---', 'sum');
+      // 每连续10个分片延迟2秒
+      if ((passIdx + 1) % 10 === 0 && i + CONCUR < indices.length) {
+        log('--- 等待2秒 ---', 'wait');
         await delay(2000);
       }
     }
-    log('→ 第' + pass + '轮完成', 'sum');
   }
 
-  log('\n====== 下载报告 ======', 'sum');
-  log('总分段: ' + total, 'sum');
-  log('成功: ' + bufs.length, 'sum');
-  log('失败: ' + failed.length, 'sum');
-  log('总大小: ' + fmtSize(totalBytes), 'sum');
+  log('\n====== 下载报告 ======', 'wait');
+  log('总分段: ' + total, 'wait');
+  log('成功: ' + bufs.length, 'wait');
+  log('失败: ' + failed.length, 'wait');
+  log('总大小: ' + fmtSize(totalBytes), 'wait');
 
-  if (bufs.length === 0) {
-    log('❌ 没有成功下载任何分片', 'xx');
-    return;
-  }
+  if (bufs.length === 0) { log('❌ 没有成功下载任何分片', 'xx'); return; }
 
   log('\n拼接 ' + fmtSize(totalBytes) + '...');
   const blob = new Blob(bufs, { type: 'video/mp2t' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  const filename = 'video_' + Date.now() + '.ts';
-  a.download = filename;
+  a.download = 'video_' + Date.now() + '.ts';
   a.click();
-  log('✅ 下载完成！文件: ' + filename, 'ok');
+  log('✅ 下载完成！', 'ok');
 }
 
 window.onload = () => { const u = new URL(location.href).searchParams.get('url'); if (u) { S('urlInput').value = u; start(); } };
