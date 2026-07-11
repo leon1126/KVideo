@@ -41,7 +41,7 @@ async function start() {
     let text = await res.text();
     const allSegs = await parseM3u8(text, u, proxy);
     log('分片数: ' + allSegs.length);
-    log('逐个下载中...', 'wait');
+    log('逐个下载中，每片间隔0.5秒...', 'wait');
     await downloadAll(allSegs, proxy);
   } catch(e) { log('\n❌ 错误: ' + (e.message || e)); }
 }
@@ -87,17 +87,14 @@ async function downloadAll(segs, proxy) {
       await delay(2000);
     }
 
-    // 逐个下载，确保序号正确
     for (let b = 0; b < indices.length; b++) {
       const idx = indices[b];
-      const seq = b + 1;  // 本轮内的序号
+      const seq = b + 1;
       try {
-        // 先尝试直连 (可能支持CORS)
         let sr;
         try {
           sr = await fetch(segs[idx], { signal: AbortSignal.timeout(5000) });
         } catch(e) {
-          // 直连失败(CORS/超时)，走代理
           sr = await fetch(proxy(segs[idx]), { signal: AbortSignal.timeout(30000) });
         }
         const buf = await sr.arrayBuffer();
@@ -114,13 +111,12 @@ async function downloadAll(segs, proxy) {
         log('XX ' + seq + '/' + total + ' err', 'xx');
       }
 
-      // 每5个分片延迟2.5秒（避免CDN限速）
-      if (seq % 5 === 0 && b < indices.length - 1) {
-        log('--- 暂停2.5秒 ---', 'wait');
-        await delay(2500);
+      // 每个分片间隔0.5秒
+      if (b < indices.length - 1) {
+        await delay(500);
       }
     }
-    log('→ 第' + pass + '轮完成: ' + (total - failed.length) + '/' + total + ' OK, 累计 ' + fmtSize(totalBytes), 'wait');
+    log('→ 第' + pass + '轮: ' + (total - failed.length) + '/' + total + ' OK, 累计 ' + fmtSize(totalBytes), 'wait');
   }
 
   log('\n====== 下载报告 ======', 'wait');
