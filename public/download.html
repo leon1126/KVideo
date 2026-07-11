@@ -10,7 +10,6 @@ input{width:100%;padding:10px;border-radius:8px;border:1px solid #333;background
 .ok{color:#4ade80}
 .xx{color:#f87171}
 .sum{color:#fbbf24}
-.big{color:#60a5fa}
 </style>
 </head>
 <body>
@@ -29,6 +28,7 @@ const log = (m, cls) => {
   el.appendChild(d);
   el.scrollTop = el.scrollHeight;
 };
+const delay = ms => new Promise(r => setTimeout(r, ms));
 
 async function start() {
   let u = S('urlInput').value.trim() || new URL(location.href).searchParams.get('url');
@@ -40,7 +40,6 @@ async function start() {
     log('获取 m3u8...');
     let res = await fetch(proxy(u));
     let text = await res.text();
-
     const allSegs = await parseM3u8(text, u, proxy);
     log('分片数: ' + allSegs.length);
     await downloadAll(allSegs, proxy);
@@ -56,12 +55,8 @@ async function parseM3u8(text, baseUrl, proxy) {
     let bw = 0;
     for (const line of lines) {
       const t = line.trim();
-      if (t.startsWith('#EXT-X-STREAM-INF:')) {
-        bw = parseInt(t.match(/BANDWIDTH=(\d+)/)?.[1] || '0');
-      } else if (bw > 0 && t && !t.startsWith('#')) {
-        variants.push({ bw, url: t.startsWith('http') ? t : new URL(t, baseUrl).toString() });
-        bw = 0;
-      }
+      if (t.startsWith('#EXT-X-STREAM-INF:')) bw = parseInt(t.match(/BANDWIDTH=(\d+)/)?.[1] || '0');
+      else if (bw > 0 && t && !t.startsWith('#')) { variants.push({ bw, url: t.startsWith('http') ? t : new URL(t, baseUrl).toString() }); bw = 0; }
     }
     variants.sort((a, b) => b.bw - a.bw);
     if (!variants.length) throw new Error('无可用视频流');
@@ -82,12 +77,9 @@ function fmtSize(bytes) {
 async function downloadAll(segs, proxy) {
   const bufs = [];
   let failed = [];
-  const CONCUR = 5; // 并发数
+  const CONCUR = 2;
   const total = segs.length;
-  let done = 0;
   let totalBytes = 0;
-  let smallCount = 0;
-  const NORMAL_SIZE = 500 * 1024;
 
   for (let pass = 1; pass <= 3; pass++) {
     const indices = pass === 1 ? segs.map((_, i) => i) : [...failed];
@@ -96,48 +88,42 @@ async function downloadAll(segs, proxy) {
 
     if (pass > 1) {
       log('--- 第' + pass + '轮重试 ' + indices.length + '个 ---', 'sum');
-      await new Promise(r => setTimeout(r, 2000));
+      await delay(2000);
     }
 
+    let inThisPass = 0;
     for (let i = 0; i < indices.length; i += CONCUR) {
       const batch = indices.slice(i, i + CONCUR);
       await Promise.all(batch.map(async (idx) => {
-        done++;
-        const n = done;
         try {
           const sr = await fetch(proxy(segs[idx]), { signal: AbortSignal.timeout(30000) });
           const buf = await sr.arrayBuffer();
-          if (buf.byteLength < NORMAL_SIZE) smallCount++;
           if (sr.ok && buf.byteLength > 1000) {
             bufs.push(buf);
             totalBytes += buf.byteLength;
-            log('OK ' + n + '/' + total + ' ' + fmtSize(buf.byteLength));
           } else {
             failed.push(idx);
-            log('XX ' + n + '/' + total + ' ' + fmtSize(buf.byteLength), 'xx');
           }
         } catch(e) {
           failed.push(idx);
-          log('XX ' + n + '/' + total + ' err', 'xx');
         }
       }));
-      // 每连续10个分片后延迟800ms，避免触发CDN限速
-      if (done % 10 === 0 && i + CONCUR < indices.length) {
-        await new Promise(r => setTimeout(r, 800));
+      inThisPass += batch.length;
+      log((failed.includes(batch[0]) ? 'XX' : 'OK') + ' ' + inThisPass + '/' + total + ' ' + fmtSize(totalBytes));
+
+      // 每连续10个分片，停2秒
+      if (inThisPass % 10 === 0 && i + CONCUR < indices.length) {
+        log('--- 等待2秒避免CDN限速 ---', 'sum');
+        await delay(2000);
       }
     }
-
-    const good = total - failed.length;
-    log('→ 第' + pass + '轮: ' + good + '/' + total + ' OK, 累计 ' + fmtSize(totalBytes), 'sum');
+    log('→ 第' + pass + '轮完成', 'sum');
   }
 
-  const bigCount = Math.max(0, bufs.length - smallCount);
   log('\n====== 下载报告 ======', 'sum');
   log('总分段: ' + total, 'sum');
   log('成功: ' + bufs.length, 'sum');
   log('失败: ' + failed.length, 'sum');
-  log('正常分片(>500KB): ' + bigCount, 'sum');
-  log('小分片(<500KB): ' + smallCount, 'sum');
   log('总大小: ' + fmtSize(totalBytes), 'sum');
 
   if (bufs.length === 0) {
