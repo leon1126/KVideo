@@ -2,21 +2,24 @@
 <html>
 <head><meta charset="utf-8"><title>KVideo 下载器</title>
 <style>
-body{font-family:sans-serif;max-width:600px;margin:30px auto;padding:20px;background:#111;color:#eee;border-radius:12px}
+body{font-family:sans-serif;max-width:700px;margin:30px auto;padding:20px;background:#111;color:#eee;border-radius:12px}
 #s{background:#1a1a1a;padding:12px;border-radius:8px;white-space:pre;font-size:12px;height:450px;overflow-y:auto;line-height:1.5}
 .btn{background:#6366f1;color:#fff;border:none;padding:12px 24px;border-radius:8px;cursor:pointer;font-size:16px}
 .btn:hover{background:#4f46e5}
-input{width:100%;padding:10px;border-radius:8px;border:1px solid #333;background:#222;color:#eee;margin:10px 0;box-sizing:border-box}
+.btn2{background:#22c55e;color:#fff;border:none;padding:12px 24px;border-radius:8px;cursor:pointer;font-size:16px}
+input,textarea{width:100%;padding:10px;border-radius:8px;border:1px solid #333;background:#222;color:#eee;margin:6px 0;box-sizing:border-box;font-family:inherit}
+textarea{height:100px}
 .ok{color:#4ade80}
 .xx{color:#f87171}
 .wait{color:#fbbf24}
+.ep{color:#60a5fa;font-weight:bold}
 </style>
 </head>
 <body>
-<h2>📥 KVideo 下载器</h2>
-<input id="urlInput" placeholder="粘贴 m3u8 地址...">
-<button class="btn" onclick="start()">开始下载</button>
-<div id="s">就绪，粘贴 m3u8 地址后点开始下载</div>
+<h2>📥 KVideo 批量下载器</h2>
+<textarea id="urlInput" placeholder="粘贴 m3u8 地址，每行一集&#10;支持批量，一行一个URL"></textarea>
+<button class="btn" onclick="start()">▶ 开始下载</button>
+<div id="s">就绪，粘贴 m3u8 地址后点开始下载（支持批量，每行一集）</div>
 <script>
 const BASE = 'https://kvideo-8gw.pages.dev';
 const S = id => document.getElementById(id);
@@ -31,19 +34,32 @@ const log = (m, cls) => {
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
 async function start() {
-  let u = S('urlInput').value.trim() || new URL(location.href).searchParams.get('url');
-  if (!u) { alert('请粘贴 m3u8 地址'); return; }
+  const raw = S('urlInput').value.trim();
+  if (!raw) { alert('请粘贴 m3u8 地址'); return; }
+  const urls = raw.split('\n').map(u => u.trim()).filter(u => u);
   S('s').textContent = '';
   const proxy = raw => BASE + '/api/proxy?url=' + encodeURIComponent(raw);
-  try {
-    log('获取 m3u8...');
-    let res = await fetch(proxy(u));
-    let text = await res.text();
-    const allSegs = await parseM3u8(text, u, proxy);
-    log('分片数: ' + allSegs.length);
-    log('逐个下载中，每片间隔0.5秒...', 'wait');
-    await downloadAll(allSegs, proxy);
-  } catch(e) { log('\n❌ 错误: ' + (e.message || e)); }
+
+  for (let ep = 0; ep < urls.length; ep++) {
+    const u = urls[ep];
+    log('─── 第 ' + (ep+1) + '/' + urls.length + ' 集 ───', 'ep');
+    try {
+      log('获取 m3u8...');
+      let res = await fetch(proxy(u));
+      let text = await res.text();
+      const allSegs = await parseM3u8(text, u, proxy);
+      log('分片数: ' + allSegs.length);
+      await downloadOne(allSegs, proxy, ep, urls.length);
+    } catch(e) {
+      log('❌ 第' + (ep+1) + '集错误: ' + (e.message || e), 'xx');
+    }
+    // 每集之间停5秒
+    if (ep < urls.length - 1) {
+      log('--- 等待5秒后下一集 ---', 'wait');
+      await delay(5000);
+    }
+  }
+  log('\n🎉 全部下载完成！共 ' + urls.length + ' 集', 'ep');
 }
 
 async function parseM3u8(text, baseUrl, proxy) {
@@ -71,7 +87,7 @@ function fmtSize(bytes) {
   return (bytes/1048576).toFixed(1) + 'MB';
 }
 
-async function downloadAll(segs, proxy) {
+async function downloadOne(segs, proxy, ep, totalEp) {
   const bufs = [];
   let failed = [];
   const total = segs.length;
@@ -83,7 +99,7 @@ async function downloadAll(segs, proxy) {
     failed = [];
 
     if (pass > 1) {
-      log('--- 第' + pass + '轮重试 ' + indices.length + '个 ---', 'wait');
+      log('  └─ 第' + pass + '轮重试 ' + indices.length + '个', 'wait');
       await delay(2000);
     }
 
@@ -101,47 +117,42 @@ async function downloadAll(segs, proxy) {
         if (sr.ok && buf.byteLength > 1000) {
           bufs.push(buf);
           totalBytes += buf.byteLength;
-          log('OK ' + seq + '/' + total + ' ' + fmtSize(buf.byteLength), 'ok');
+          log('  OK ' + seq + '/' + total + ' ' + fmtSize(buf.byteLength), 'ok');
         } else {
           failed.push(idx);
-          log('XX ' + seq + '/' + total + ' ' + fmtSize(buf.byteLength), 'xx');
+          log('  XX ' + seq + '/' + total + ' ' + fmtSize(buf.byteLength), 'xx');
         }
       } catch(e) {
         failed.push(idx);
-        log('XX ' + seq + '/' + total + ' err', 'xx');
+        log('  XX ' + seq + '/' + total + ' err', 'xx');
       }
 
-      // 每个分片间隔0.5秒
       if (b < indices.length - 1) {
         await delay(1000);
-      // 每5个额外停3秒
+      }
       if (seq % 3 === 0 && b < indices.length - 1) {
-        log('--- 长暂停3秒 ---', 'wait');
+        log('  --- 暂停2.5秒 ---', 'wait');
         await delay(2500);
       }
-      }
     }
-    log('→ 第' + pass + '轮: ' + (total - failed.length) + '/' + total + ' OK, 累计 ' + fmtSize(totalBytes), 'wait');
   }
 
-  log('\n====== 下载报告 ======', 'wait');
-  log('总分段: ' + total, 'wait');
-  log('成功: ' + bufs.length, 'wait');
-  log('失败: ' + failed.length, 'wait');
-  log('总大小: ' + fmtSize(totalBytes), 'wait');
-
-  if (bufs.length === 0) { log('❌ 没有成功下载任何分片', 'xx'); return; }
-
-  log('\n拼接 ' + fmtSize(totalBytes) + '...');
+  // 保存本集
+  const epSize = fmtSize(totalBytes);
+  log('  ├─ 成功: ' + bufs.length + ', 失败: ' + failed.length + ', 大小: ' + epSize, 'wait');
   const blob = new Blob(bufs, { type: 'video/mp2t' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'video_' + Date.now() + '.ts';
+  const epNum = String(ep + 1).padStart(2, '0');
+  a.download = 'episode_' + epNum + '.ts';
   a.click();
-  log('✅ 下载完成！', 'ok');
+  log('  └─ ✅ 第' + (ep+1) + '集已保存', 'ok');
 }
 
-window.onload = () => { const u = new URL(location.href).searchParams.get('url'); if (u) { S('urlInput').value = u; start(); } };
+window.onload = () => {
+  const u = new URL(location.href).searchParams.get('url');
+  if (u) { S('urlInput').value = u; start(); }
+};
 </script>
 </body>
 </html>
