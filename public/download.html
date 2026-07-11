@@ -3,10 +3,13 @@
 <head><meta charset="utf-8"><title>KVideo 下载器</title>
 <style>
 body{font-family:sans-serif;max-width:600px;margin:30px auto;padding:20px;background:#111;color:#eee;border-radius:12px}
-#s{background:#1a1a1a;padding:15px;border-radius:8px;white-space:pre;font-size:13px;height:400px;overflow-y:auto;line-height:1.6}
+#s{background:#1a1a1a;padding:12px;border-radius:8px;white-space:pre;font-size:12px;height:450px;overflow-y:auto;line-height:1.5}
 .btn{background:#6366f1;color:#fff;border:none;padding:12px 24px;border-radius:8px;cursor:pointer;font-size:16px}
 .btn:hover{background:#4f46e5}
 input{width:100%;padding:10px;border-radius:8px;border:1px solid #333;background:#222;color:#eee;margin:10px 0;box-sizing:border-box}
+.ok{color:#4ade80}
+.xx{color:#f87171}
+.sum{color:#fbbf24}
 </style>
 </head>
 <body>
@@ -17,7 +20,14 @@ input{width:100%;padding:10px;border-radius:8px;border:1px solid #333;background
 <script>
 const BASE = 'https://kvideo-8gw.pages.dev';
 const S = id => document.getElementById(id);
-const log = m => { const el = S('s'); el.textContent += '\n' + m; el.scrollTop = el.scrollHeight; };
+const log = (m, cls) => {
+  const el = S('s');
+  const d = document.createElement('div');
+  d.textContent = m;
+  if (cls) d.className = cls;
+  el.appendChild(d);
+  el.scrollTop = el.scrollHeight;
+};
 
 async function start() {
   let u = S('urlInput').value.trim() || new URL(location.href).searchParams.get('url');
@@ -62,12 +72,19 @@ async function parseM3u8(text, baseUrl, proxy) {
   return lines.filter(l => l.trim() && !l.startsWith('#')).map(l => l.startsWith('http') ? l : new URL(l, baseUrl).toString());
 }
 
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + 'B';
+  if (bytes < 1048576) return (bytes/1024).toFixed(1) + 'KB';
+  return (bytes/1048576).toFixed(1) + 'MB';
+}
+
 async function downloadAll(segs, proxy) {
   const bufs = [];
   let failed = [];
   const CONCUR = 5;
   const total = segs.length;
   let done = 0;
+  let totalBytes = 0;
 
   for (let pass = 1; pass <= 3; pass++) {
     const indices = pass === 1 ? segs.map((_, i) => i) : [...failed];
@@ -75,7 +92,7 @@ async function downloadAll(segs, proxy) {
     failed = [];
 
     if (pass > 1) {
-      log('--- 第' + pass + '轮重试 ' + indices.length + '个 ---');
+      log('--- 第' + pass + '轮重试 ' + indices.length + '个 ---', 'sum');
       await new Promise(r => setTimeout(r, 2000));
     }
 
@@ -86,33 +103,49 @@ async function downloadAll(segs, proxy) {
         const n = done;
         try {
           const sr = await fetch(proxy(segs[idx]));
-          if (sr.ok) {
-            bufs.push(await sr.arrayBuffer());
-            log('OK ' + n + '/' + total);
+          const buf = await sr.arrayBuffer();
+          if (sr.ok && buf.byteLength > 1000) {
+            bufs.push(buf);
+            totalBytes += buf.byteLength;
+            log('OK ' + n + '/' + total + ' ' + fmtSize(buf.byteLength), 'ok');
           } else {
             failed.push(idx);
-            log('XX ' + n + '/' + total);
+            log('XX ' + n + '/' + total + ' ' + fmtSize(buf.byteLength), 'xx');
           }
         } catch(e) {
           failed.push(idx);
-          log('XX ' + n + '/' + total);
+          log('XX ' + n + '/' + total + ' err', 'xx');
         }
       }));
     }
+
+    const good = total - failed.length;
+    log('→ 第' + pass + '轮: ' + good + '/'
+      + total + ' OK, 累计 ' + fmtSize(totalBytes), 'sum');
   }
 
-  if (failed.length > 0) {
-    log(failed.length + '个分片最终下载失败');
+  log('\n====== 下载报告 ======', 'sum');
+  log('总分段: ' + total, 'sum');
+  log('成功: ' + bufs.length, 'sum');
+  log('失败: ' + failed.length, 'sum');
+  log('总大小: ' + fmtSize(totalBytes), 'sum');
+  if (bufs.length > 0) {
+    log('平均分片: ' + fmtSize(totalBytes / bufs.length), 'sum');
   }
-  const totalMB = (bufs.reduce((s, b) => s + b.byteLength, 0) / 1048576).toFixed(1);
-  log('\n拼接 ' + totalMB + 'MB...');
+
+  if (bufs.length === 0) {
+    log('❌ 没有成功下载任何分片', 'xx');
+    return;
+  }
+
+  log('\n拼接 ' + fmtSize(totalBytes) + '...');
   const blob = new Blob(bufs, { type: 'video/mp2t' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   const filename = 'video_' + Date.now() + '.ts';
   a.download = filename;
   a.click();
-  log('\n✅ 下载完成！文件: ' + filename + ' (' + totalMB + 'MB)');
+  log('✅ 下载完成！文件: ' + filename, 'ok');
 }
 
 window.onload = () => { const u = new URL(location.href).searchParams.get('url'); if (u) { S('urlInput').value = u; start(); } };
