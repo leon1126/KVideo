@@ -1,169 +1,116 @@
 <!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>KVideo 批量下载器</title>
+<head><meta charset="utf-8"><title>KVideo 下载器</title>
 <style>
-body{font-family:sans-serif;max-width:700px;margin:30px auto;padding:20px;background:#111;color:#eee;border-radius:12px}
+body{font-family:sans-serif;max-width:600px;margin:30px auto;padding:20px;background:#111;color:#eee;border-radius:12px}
+#s{background:#1a1a1a;padding:15px;border-radius:8px;white-space:pre;font-size:12px;height:450px;overflow-y:auto;line-height:1.6}
 .btn{background:#6366f1;color:#fff;border:none;padding:12px 24px;border-radius:8px;cursor:pointer;font-size:16px}
 .btn:hover{background:#4f46e5}
-input,textarea{width:100%;padding:10px;border-radius:8px;border:1px solid #333;background:#222;color:#eee;margin:6px 0;box-sizing:border-box;font-family:inherit}
-textarea{height:100px}
-#s{background:#1a1a1a;padding:12px;border-radius:8px;font-size:12px;height:500px;overflow-y:auto;line-height:1.6}
-.epLine{display:flex;gap:10px;padding:2px 0;align-items:center}
-.epNum{color:#60a5fa;min-width:60px}
-.epProg{min-width:120px}
-.epSize{min-width:80px}
-.epDone{color:#4ade80}
-.epErr{color:#f87171}
-.good{color:#4ade80}
-.bad{color:#f87171}
+input{width:100%;padding:10px;border-radius:8px;border:1px solid #333;background:#222;color:#eee;margin:10px 0;box-sizing:border-box}
+.ok{color:#4ade80}
+.xx{color:#f87171}
 </style>
 </head>
 <body>
-<h2>📥 KVideo 批量下载器</h2>
-<textarea id="urlInput" placeholder="粘贴 m3u8 地址，每行一集"></textarea>
-<button class="btn" onclick="start()">▶ 开始下载</button>
-<div id="s">就绪，粘贴 m3u8 地址后点开始下载</div>
+<h2>KVideo 下载器</h2>
+<input id="urlInput" placeholder="m3u8 地址">
+<button class="btn" onclick="start()">下载</button>
+<div id="s">就绪</div>
 <script>
 const BASE = 'https://kvideo-8gw.pages.dev';
-const S = () => document.getElementById('s');
+const S = id => document.getElementById(id);
+const log = msg => { const el = S('s'); el.textContent += '\n' + msg; el.scrollTop = el.scrollHeight; };
 const delay = ms => new Promise(r => setTimeout(r, ms));
-const GOOD_SIZE = 1048576; // 1MB以上算正常
+const GOOD_SIZE = 1048576;
 
 async function start() {
-  const raw = document.getElementById('urlInput').value.trim();
-  if (!raw) { alert('请粘贴 m3u8 地址'); return; }
-  const urls = raw.split('\n').map(u => u.trim()).filter(u => u);
-  S().textContent = '';
-
-  const rows = urls.map((_, i) => {
-    const row = document.createElement('div');
-    row.className = 'epLine';
-    row.innerHTML = '<span class="epNum">#' + String(i+1).padStart(2,'0') + '</span><span class="epProg">排队中</span><span class="epSize"></span>';
-    S().appendChild(row);
-    return row;
-  });
-
-  await Promise.all(urls.map((u, i) => downloadEpisode(u, i, rows[i])));
-  const done = document.createElement('div');
-  done.innerHTML = '<b>🎉 全部下载完成！</b>';
-  done.className = 'epDone';
-  S().appendChild(done);
-}
-
-async function downloadEpisode(m3u8Url, ep, row) {
+  let u = S('urlInput').value.trim() || new URL(location.href).searchParams.get('url');
+  if (!u) return;
+  S('s').textContent = '';
   const proxy = raw => BASE + '/api/proxy?url=' + encodeURIComponent(raw);
-  const prog = () => row.querySelector('.epProg');
-  const sz = () => row.querySelector('.epSize');
-
   try {
-    prog().textContent = '解析中...';
-    let res = await fetch(proxy(m3u8Url));
+    log('获取 m3u8...');
+    let res = await fetch(proxy(u));
     let text = await res.text();
-
-    const lines = text.split(/\r?\n/);
-    let segs;
-    if (text.includes('EXT-X-STREAM-INF')) {
-      let variants = [], bw = 0;
-      for (const line of lines) {
-        const t = line.trim();
-        if (t.startsWith('#EXT-X-STREAM-INF:')) bw = parseInt(t.match(/BANDWIDTH=(\d+)/)?.[1] || '0');
-        else if (bw > 0 && t && !t.startsWith('#')) { variants.push({ bw, url: t.startsWith('http') ? t : new URL(t, m3u8Url).toString() }); bw = 0; }
-      }
-      variants.sort((a, b) => b.bw - a.bw);
-      if (!variants.length) throw new Error('无可用视频流');
-      let r2 = await fetch(proxy(variants[0].url));
-      let t2 = await r2.text();
-      segs = t2.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#')).map(l => l.startsWith('http') ? l : new URL(l, variants[0].url).toString());
-    } else {
-      segs = lines.filter(l => l.trim() && !l.startsWith('#')).map(l => l.startsWith('http') ? l : new URL(l, m3u8Url).toString());
-    }
-
-    const totalSegs = segs.length;
-    prog().textContent = '0/' + totalSegs;
-
-    // 存储每片的数据，下标对应分片索引
-    const segData = new Array(totalSegs).fill(null);
-    let totalBytes = 0;
-    let goodCount = 0;
-    let badCount = 0;
-
-    for (let pass = 1; pass <= 3; pass++) {
-      // 第一轮全部下载，后续只重试失败/截断的
-      const indices = [];
-      if (pass === 1) {
-        for (let i = 0; i < totalSegs; i++) indices.push(i);
-      } else {
-        for (let i = 0; i < totalSegs; i++) {
-          if (segData[i] === null || (segData[i].byteLength > 0 && segData[i].byteLength < GOOD_SIZE)) {
-            indices.push(i);
-          }
-        }
-      }
-      if (indices.length === 0) break;
-      if (pass > 1) {
-        await delay(2000);
-      }
-
-      for (let b = 0; b < indices.length; b++) {
-        const idx = indices[b];
-        const seq = b + 1;
-        try {
-          let sr;
-          try { sr = await fetch(segs[idx], { signal: AbortSignal.timeout(5000) }); }
-          catch(e) { sr = await fetch(proxy(segs[idx]), { signal: AbortSignal.timeout(30000) }); }
-          const buf = await sr.arrayBuffer();
-          if (sr.ok && buf.byteLength > 1000) {
-            // 减去旧数据（重试时替换）
-            if (segData[idx] !== null) totalBytes -= segData[idx].byteLength;
-            segData[idx] = buf;
-            totalBytes += buf.byteLength;
-          } else {
-            // 保留旧数据（如有），但标记为需要重试
-            if (segData[idx] === null) segData[idx] = new ArrayBuffer(0);
-          }
-        } catch(e) {
-          if (segData[idx] === null) segData[idx] = new ArrayBuffer(0);
-        }
-        prog().textContent = seq + '/' + totalSegs;
-        sz().textContent = fmtSize(totalBytes);
-        if (b < indices.length - 1) await delay(1000);
-        if (seq % 3 === 0 && b < indices.length - 1) await delay(2500);
-        if (seq % 102 === 0) await delay(10000);
-      }
-    }
-
-    // 统计
-    goodCount = segData.filter(b => b && b.byteLength >= GOOD_SIZE).length;
-    badCount = segData.filter(b => b && b.byteLength > 0 && b.byteLength < GOOD_SIZE).length;
-    const emptyCount = segData.filter(b => !b || b.byteLength === 0).length;
-
-    const bufs = segData.filter(b => b && b.byteLength > 0);
-
-    let status = '✅ ' + bufs.length + '/' + totalSegs;
-    status += ' <span class="good">' + goodCount + '正常</span>';
-    if (badCount > 0) status += ' <span class="bad">' + badCount + '截断</span>';
-    if (emptyCount > 0) status += ' <span class="bad">' + emptyCount + '丢失</span>';
-    prog().innerHTML = status;
-
-    row.querySelector('.epNum').textContent = '✅ #' + String(ep+1).padStart(2,'0');
-    row.querySelector('.epNum').className = 'epNum ' + (badCount > totalSegs * 0.1 ? 'epErr' : 'epDone');
-    sz().textContent = fmtSize(totalBytes);
-
-    const blob = new Blob(bufs, { type: 'video/mp2t' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'ep_' + String(ep+1).padStart(2,'0') + '.ts';
-    a.click();
-  } catch(e) {
-    prog().textContent = '❌ ' + (e.message || e);
-    row.className = 'epLine epErr';
-  }
+    const segs = await getSegs(text, u, proxy);
+    log('分片: ' + segs.length);
+    await downloadAll(segs, proxy);
+  } catch(e) { log('错误: ' + e.message); }
 }
 
-function fmtSize(bytes) {
-  if (bytes < 1024) return bytes + 'B';
-  if (bytes < 1048576) return (bytes/1024).toFixed(1) + 'KB';
-  return (bytes/1048576).toFixed(1) + 'MB';
+async function getSegs(text, baseUrl, proxy) {
+  const lines = text.split(/\r?\n/);
+  if (text.includes('EXT-X-STREAM-INF')) {
+    let vs = [], bw = 0;
+    for (const l of lines) {
+      const t = l.trim();
+      if (t.startsWith('#EXT-X-STREAM-INF:')) bw = parseInt(t.match(/BANDWIDTH=(\d+)/)?.[1] || '0');
+      else if (bw > 0 && t && !t.startsWith('#')) { vs.push({bw, url: t.startsWith('http')?t:new URL(t,baseUrl)+''}); bw = 0; }
+    }
+    vs.sort((a,b) => b.bw - a.bw);
+    const best = vs[0].url;
+    log('画质: ' + best);
+    let r2 = await fetch(proxy(best));
+    let t2 = await r2.text();
+    return t2.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#')).map(l => l.startsWith('http')?l:new URL(l,best)+'');
+  }
+  return lines.filter(l => l.trim() && !l.startsWith('#')).map(l => l.startsWith('http')?l:new URL(l,baseUrl)+'');
+}
+
+function fmt(s) { return s < 1048576 ? (s/1024).toFixed(1)+'KB' : (s/1048576).toFixed(1)+'MB'; }
+
+async function downloadAll(segs, proxy) {
+  const total = segs.length;
+  const bufs = new Array(total).fill(null);
+  let bytes = 0;
+
+  for (let pass = 1; pass <= 3; pass++) {
+    const idxs = [];
+    for (let i = 0; i < total; i++) {
+      if (pass === 1) idxs.push(i);
+      else if (!bufs[i] || (bufs[i].byteLength > 0 && bufs[i].byteLength < GOOD_SIZE)) idxs.push(i);
+    }
+    if (!idxs.length) break;
+    if (pass > 1) { log('--- 第' + pass + '轮重试 ---'); await delay(2000); }
+
+    for (let b = 0; b < idxs.length; b++) {
+      const idx = idxs[b];
+      const seq = b + 1;
+      try {
+        let sr;
+        try { sr = await fetch(segs[idx], {signal:AbortSignal.timeout(5000)}); }
+        catch(e) { sr = await fetch(proxy(segs[idx]), {signal:AbortSignal.timeout(30000)}); }
+        const buf = await sr.arrayBuffer();
+        if (sr.ok && buf.byteLength > 1000) {
+          if (bufs[idx]) bytes -= bufs[idx].byteLength;
+          bufs[idx] = buf;
+          bytes += buf.byteLength;
+          const good = buf.byteLength >= GOOD_SIZE;
+          log((good?'OK':'SM') + ' ' + seq + '/' + total + ' ' + fmt(buf.byteLength));
+        } else {
+          if (!bufs[idx]) bufs[idx] = new ArrayBuffer(0);
+          log('XX ' + seq + '/' + total + ' ' + fmt(buf.byteLength));
+        }
+      } catch(e) {
+        if (!bufs[idx]) bufs[idx] = new ArrayBuffer(0);
+        log('XX ' + seq + '/' + total + ' err');
+      }
+
+      if (b < idxs.length - 1) await delay(1000);
+      if (seq % 3 === 0 && b < idxs.length - 1) await delay(2500);
+      if (seq % 102 === 0) await delay(10000);
+    }
+  }
+
+  const ok = bufs.filter(b => b && b.byteLength >= GOOD_SIZE).length;
+  const bad = bufs.filter(b => b && b.byteLength > 0 && b.byteLength < GOOD_SIZE).length;
+  log('---\n正常: ' + ok + ' 截断: ' + bad + ' 总大小: ' + fmt(bytes));
+  const blob = new Blob(bufs.filter(b => b && b.byteLength > 0), {type:'video/mp2t'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'video_' + Date.now() + '.ts';
+  a.click();
+  log('完成! ' + fmt(bytes));
 }
 </script>
 </body>
