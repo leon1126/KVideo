@@ -61,10 +61,9 @@ async function start() {
       async function work(idx) {
         try {
           let sr = await fetch(proxy(segs[idx]));
-          if (sr.ok) { bufs.push(await sr.arrayBuffer()); failed.delete(idx); }
-          else failed.add(idx);
-        } catch(e) { failed.add(idx); }
-        done++; log(done + '/' + targets.length);
+          if (sr.ok) { bufs.push(await sr.arrayBuffer()); failed.delete(idx); log('OK ' + done + '/' + targets.length); }
+          else { failed.add(idx); log('XX ' + done + '/' + targets.length); }
+        } catch(e) { failed.add(idx); log('XX ' + done + '/' + targets.length); }
       }
       // Run CONCUR at a time
       for (let i = 0; i < targets.length; i += CONCUR) {
