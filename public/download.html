@@ -48,11 +48,10 @@ async function getSegs(text, baseUrl, proxy) {
       else if (bw > 0 && t && !t.startsWith('#')) { vs.push({bw, url: t.startsWith('http')?t:new URL(t,baseUrl)+''}); bw = 0; }
     }
     vs.sort((a,b) => b.bw - a.bw);
-    const best = vs[0].url;
-    log('画质: ' + best);
-    let r2 = await fetch(proxy(best));
+    log('画质: ' + vs[0].url);
+    let r2 = await fetch(proxy(vs[0].url));
     let t2 = await r2.text();
-    return t2.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#')).map(l => l.startsWith('http')?l:new URL(l,best)+'');
+    return t2.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#')).map(l => l.startsWith('http')?l:new URL(l,vs[0].url)+'');
   }
   return lines.filter(l => l.trim() && !l.startsWith('#')).map(l => l.startsWith('http')?l:new URL(l,baseUrl)+'');
 }
@@ -63,15 +62,26 @@ async function downloadAll(segs, proxy) {
   const total = segs.length;
   const bufs = new Array(total).fill(null);
   let bytes = 0;
+  let pass = 0;
+  let lastBad = -1;
 
-  for (let pass = 1; pass <= 3; pass++) {
+  while (true) {
+    pass++;
     const idxs = [];
     for (let i = 0; i < total; i++) {
-      if (pass === 1) idxs.push(i);
-      else if (!bufs[i] || (bufs[i].byteLength > 0 && bufs[i].byteLength < GOOD_SIZE)) idxs.push(i);
+      if (!bufs[i] || (bufs[i].byteLength > 0 && bufs[i].byteLength < GOOD_SIZE)) idxs.push(i);
     }
-    if (!idxs.length) break;
-    if (pass > 1) { log('--- 第' + pass + '轮重试 ---'); await delay(2000); }
+    if (idxs.length === 0) {
+      log('全部正常!');
+      break;
+    }
+    if (idxs.length === lastBad) {
+      log('补了也没变化(' + idxs.length + '个始终补不好)，停止');
+      break;
+    }
+    lastBad = idxs.length;
+
+    if (pass > 1) { log('--- 第' + pass + '轮 剩余' + idxs.length + '个 ---'); await delay(2000); }
 
     for (let b = 0; b < idxs.length; b++) {
       const idx = idxs[b];
@@ -85,8 +95,7 @@ async function downloadAll(segs, proxy) {
           if (bufs[idx]) bytes -= bufs[idx].byteLength;
           bufs[idx] = buf;
           bytes += buf.byteLength;
-          const good = buf.byteLength >= GOOD_SIZE;
-          log((good?'OK':'SM') + ' ' + seq + '/' + total + ' ' + fmt(buf.byteLength));
+          log((buf.byteLength >= GOOD_SIZE ? 'OK' : 'SM') + ' ' + seq + '/' + total + ' ' + fmt(buf.byteLength));
         } else {
           if (!bufs[idx]) bufs[idx] = new ArrayBuffer(0);
           log('XX ' + seq + '/' + total + ' ' + fmt(buf.byteLength));
