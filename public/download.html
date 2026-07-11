@@ -7,8 +7,6 @@ body{font-family:sans-serif;max-width:600px;margin:30px auto;padding:20px;backgr
 .btn{background:#6366f1;color:#fff;border:none;padding:12px 24px;border-radius:8px;cursor:pointer;font-size:16px}
 .btn:hover{background:#4f46e5}
 input{width:100%;padding:10px;border-radius:8px;border:1px solid #333;background:#222;color:#eee;margin:10px 0;box-sizing:border-box}
-.ok{color:#4ade80}
-.xx{color:#f87171}
 </style>
 </head>
 <body>
@@ -71,14 +69,8 @@ async function downloadAll(segs, proxy) {
     for (let i = 0; i < total; i++) {
       if (!bufs[i] || (bufs[i].byteLength > 0 && bufs[i].byteLength < GOOD_SIZE)) idxs.push(i);
     }
-    if (idxs.length === 0) {
-      log('全部正常!');
-      break;
-    }
-    if (idxs.length === lastBad) {
-      log('补了也没变化(' + idxs.length + '个始终补不好)，停止');
-      break;
-    }
+    if (idxs.length === 0) { log('全部正常!'); break; }
+    if (idxs.length === lastBad) { log('剩余' + idxs.length + '个始终补不好，停止'); break; }
     lastBad = idxs.length;
 
     if (pass > 1) { log('--- 第' + pass + '轮 剩余' + idxs.length + '个 ---'); await delay(10000); }
@@ -86,6 +78,7 @@ async function downloadAll(segs, proxy) {
     for (let b = 0; b < idxs.length; b++) {
       const idx = idxs[b];
       const seq = b + 1;
+      let needPause = false;
       try {
         let sr;
         try { sr = await fetch(segs[idx], {signal:AbortSignal.timeout(5000)}); }
@@ -95,15 +88,24 @@ async function downloadAll(segs, proxy) {
           if (bufs[idx]) bytes -= bufs[idx].byteLength;
           bufs[idx] = buf;
           bytes += buf.byteLength;
-          log((buf.byteLength >= GOOD_SIZE ? 'OK' : 'SM') + ' ' + seq + '/' + total + ' ' + fmt(buf.byteLength));
+          if (buf.byteLength >= GOOD_SIZE) {
+            log('OK ' + seq + '/' + total + ' ' + fmt(buf.byteLength));
+          } else {
+            log('SM ' + seq + '/' + total + ' ' + fmt(buf.byteLength));
+            needPause = true;
+          }
         } else {
           if (!bufs[idx]) bufs[idx] = new ArrayBuffer(0);
           log('XX ' + seq + '/' + total + ' ' + fmt(buf.byteLength));
+          needPause = true;
         }
       } catch(e) {
         if (!bufs[idx]) bufs[idx] = new ArrayBuffer(0);
         log('XX ' + seq + '/' + total + ' err');
+        needPause = true;
       }
+
+      if (needPause) { log('--- 暂停15秒 ---'); await delay(15000); }
 
       if (b < idxs.length - 1) await delay(1000);
       if (seq % 3 === 0 && b < idxs.length - 1) await delay(2500);
@@ -113,7 +115,8 @@ async function downloadAll(segs, proxy) {
 
   const ok = bufs.filter(b => b && b.byteLength >= GOOD_SIZE).length;
   const bad = bufs.filter(b => b && b.byteLength > 0 && b.byteLength < GOOD_SIZE).length;
-  log('---\n正常: ' + ok + ' 截断: ' + bad + ' 总大小: ' + fmt(bytes));
+  log('---');
+  log('正常: ' + ok + ' 截断: ' + bad + ' 总大小: ' + fmt(bytes));
   const blob = new Blob(bufs.filter(b => b && b.byteLength > 0), {type:'video/mp2t'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
