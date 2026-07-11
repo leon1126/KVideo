@@ -114,6 +114,11 @@ async function downloadAll(segs, proxy) {
       // 每个分片间隔0.5秒
       if (b < indices.length - 1) {
         await delay(500);
+      // 每5个额外停3秒
+      if (seq % 5 === 0 && b < indices.length - 1) {
+        log('--- 长暂停3秒 ---', 'wait');
+        await delay(3000);
+      }
       }
     }
     log('→ 第' + pass + '轮: ' + (total - failed.length) + '/' + total + ' OK, 累计 ' + fmtSize(totalBytes), 'wait');
