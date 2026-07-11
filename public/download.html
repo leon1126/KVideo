@@ -109,7 +109,7 @@ async function downloadEpisode(m3u8Url, ep, total, row) {
         sz().textContent = fmtSize(totalBytes);
         if (b < indices.length - 1) await delay(1000);
         if (seq % 3 === 0 && b < indices.length - 1) await delay(2500);
-        if (seq % 100 === 0) await delay(10000);
+        if (seq % 102 === 0) await delay(10000);
       }
     }
 
